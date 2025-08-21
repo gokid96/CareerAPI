@@ -2,12 +2,17 @@
 package com.careercoach.careercoachapi.dto.response;
 
 import com.careercoach.careercoachapi.dto.response.LearningRecommendation;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+@Setter
+@Getter
 public class LearningPathResponse {
 
+    // Getter/Setter
     private List<LearningRecommendation> recommendations;
     private String targetJobRole;
     private List<String> currentTechSkills;
@@ -31,44 +36,4 @@ public class LearningPathResponse {
         this.generatedAt = LocalDateTime.now();
     }
 
-    // Getter/Setter
-    public List<LearningRecommendation> getRecommendations() {
-        return recommendations;
-    }
-
-    public void setRecommendations(List<LearningRecommendation> recommendations) {
-        this.recommendations = recommendations;
-    }
-
-    public String getTargetJobRole() {
-        return targetJobRole;
-    }
-
-    public void setTargetJobRole(String targetJobRole) {
-        this.targetJobRole = targetJobRole;
-    }
-
-    public List<String> getCurrentTechSkills() {
-        return currentTechSkills;
-    }
-
-    public void setCurrentTechSkills(List<String> currentTechSkills) {
-        this.currentTechSkills = currentTechSkills;
-    }
-
-    public String getOverallAssessment() {
-        return overallAssessment;
-    }
-
-    public void setOverallAssessment(String overallAssessment) {
-        this.overallAssessment = overallAssessment;
-    }
-
-    public LocalDateTime getGeneratedAt() {
-        return generatedAt;
-    }
-
-    public void setGeneratedAt(LocalDateTime generatedAt) {
-        this.generatedAt = generatedAt;
-    }
 }

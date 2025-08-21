@@ -12,10 +12,10 @@ import java.util.List;
 public class InterviewQuestionsResponse {
 
     // Getter/Setter
-    private List<String> questions;
-    private String targetJobRole;
-    private List<String> techSkills;
-    private LocalDateTime generatedAt;
+    private List<String> questions;   // 질문
+    private String targetJobRole;     // 직종
+    private List<String> techSkills;  // 기술
+    private LocalDateTime generatedAt;// 생성시간
 
     // 기본 생성자
     public InterviewQuestionsResponse() {

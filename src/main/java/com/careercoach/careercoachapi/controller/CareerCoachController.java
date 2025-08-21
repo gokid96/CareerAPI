@@ -1,159 +1,76 @@
-// CareerCoachController.java
+// CareerCoachController.java - 개선된 예외처리
 package com.careercoach.careercoachapi.controller;
 
-import com.careercoach.careercoachapi.dto.response.LearningPathResponse;
 import com.careercoach.careercoachapi.dto.request.ResumeInfoRequest;
 import com.careercoach.careercoachapi.dto.response.ApiResponse;
+import com.careercoach.careercoachapi.dto.response.ComprehensiveCareerResponse;
 import com.careercoach.careercoachapi.dto.response.InterviewQuestionsResponse;
-import com.careercoach.careercoachapi.entity.ResumeInfo;
+import com.careercoach.careercoachapi.dto.response.LearningPathResponse;
 import com.careercoach.careercoachapi.service.CareerCoachService;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
-import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/v1/career-coach")
 @CrossOrigin(origins = "*") // 개발용 - 운영 시 특정 도메인으로 제한
+@RequiredArgsConstructor  // @Autowired 대신 생성자 주입
 public class CareerCoachController {
 
-    @Autowired
-    private CareerCoachService careerCoachService;
+    private final CareerCoachService careerCoachService;
 
-    /**
-     * 이력서 정보 기반 맞춤형 면접 질문 생성
-     * POST /api/v1/career-coach/interview-questions
-     */
-    @PostMapping("/interview-questions")
-    public ResponseEntity<ApiResponse<InterviewQuestionsResponse>> generateInterviewQuestions(
+    @PostMapping("/career-coaching")
+    public ResponseEntity<ApiResponse<ComprehensiveCareerResponse>> generateCareerCoaching(
             @Valid @RequestBody ResumeInfoRequest request) {
 
+        log.info("커리어 코칭 생성 요청 - 직무: {}", request.getJobRole());
+
+        CompletableFuture<InterviewQuestionsResponse> interviewQuestionsFuture =
+                CompletableFuture.supplyAsync(() ->
+                        careerCoachService.generateInterviewQuestions(request));
+
+        CompletableFuture<LearningPathResponse> learningPathFuture =
+                CompletableFuture.supplyAsync(() ->
+                        careerCoachService.generateLearningPath(request));
+
+        CompletableFuture<ComprehensiveCareerResponse> combinedFuture =
+                interviewQuestionsFuture.thenCombine(learningPathFuture,
+                        (interviewQuestions, learningPath) ->
+                                ComprehensiveCareerResponse.builder()
+                                        .interviewQuestions(interviewQuestions)
+                                        .learningPath(learningPath)
+                                        .build());
+
         try {
-            InterviewQuestionsResponse response = careerCoachService.generateInterviewQuestions(request);
+            // checked exception -> try-catch
+            ComprehensiveCareerResponse response = combinedFuture.get(45, TimeUnit.SECONDS);
+
+            log.info("커리어 코칭 생성 성공 - 직무: {}", request.getJobRole());
 
             return ResponseEntity.ok(
-                    ApiResponse.success(response, "면접 질문이 성공적으로 생성되었습니다.")
+                    ApiResponse.success(response, "커리어 코칭 정보가 성공적으로 생성되었습니다.")
             );
 
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("면접 질문 생성 중 오류가 발생했습니다: " + e.getMessage(), 500));
-        }
-    }
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            // checked exception을 RuntimeException으로 변환하여 GlobalExceptionHandler로 전달
+            log.error("비동기 작업 처리 중 오류 - 직무: {}", request.getJobRole(), e);
 
-    /**
-     * 이력서 정보 기반 개인 맞춤형 학습 경로 추천
-     * POST /api/v1/career-coach/learning-path
-     */
-    @PostMapping("/learning-path")
-    public ResponseEntity<ApiResponse<LearningPathResponse>> generateLearningPath(
-            @Valid @RequestBody ResumeInfoRequest request) {
-
-        try {
-            LearningPathResponse response = careerCoachService.generateLearningPath(request);
-
-            return ResponseEntity.ok(
-                    ApiResponse.success(response, "개인 맞춤형 학습 경로가 성공적으로 생성되었습니다.")
-            );
-
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("학습 경로 추천 생성 중 오류가 발생했습니다: " + e.getMessage(), 500));
-        }
-    }
-
-    /**
-     * 저장된 이력서 정보 단건 조회
-     * GET /api/v1/career-coach/resume/{id}
-     */
-    @GetMapping("/resume/{id}")
-    public ResponseEntity<ApiResponse<ResumeInfo>> getResumeInfo(@PathVariable Long id) {
-
-        try {
-            Optional<ResumeInfo> resumeInfo = careerCoachService.getResumeInfo(id);
-
-            if (resumeInfo.isPresent()) {
-                return ResponseEntity.ok(
-                        ApiResponse.success(resumeInfo.get(), "이력서 정보를 조회했습니다.")
-                );
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt(); // 인터럽트 상태 복원
+                throw new RuntimeException("요청 처리가 중단되었습니다.", e);
+            } else if (e instanceof TimeoutException) {
+                throw new RuntimeException("요청 처리 시간이 초과되었습니다.", e);
             } else {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(ApiResponse.error("해당 이력서 정보를 찾을 수 없습니다.", 404));
+                throw new RuntimeException("비동기 작업 처리 중 오류가 발생했습니다.", e);
             }
-
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("이력서 정보 조회 중 오류가 발생했습니다: " + e.getMessage(), 500));
-        }
-    }
-
-    /**
-     * 저장된 모든 이력서 정보 조회
-     * GET /api/v1/career-coach/resume
-     */
-    @GetMapping("/resume")
-    public ResponseEntity<ApiResponse<List<ResumeInfo>>> getAllResumeInfo() {
-
-        try {
-            List<ResumeInfo> resumeInfoList = careerCoachService.getAllResumeInfo();
-
-            return ResponseEntity.ok(
-                    ApiResponse.success(resumeInfoList, "모든 이력서 정보를 조회했습니다.")
-            );
-
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("이력서 정보 조회 중 오류가 발생했습니다: " + e.getMessage(), 500));
-        }
-    }
-
-    /**
-     * 직무별 이력서 정보 조회
-     * GET /api/v1/career-coach/resume/job-role?role={jobRole}
-     */
-    @GetMapping("/resume/job-role")
-    public ResponseEntity<ApiResponse<List<ResumeInfo>>> getResumeInfoByJobRole(
-            @RequestParam String role) {
-
-        try {
-            List<ResumeInfo> resumeInfoList = careerCoachService.getResumeInfoByJobRole(role);
-
-            return ResponseEntity.ok(
-                    ApiResponse.success(resumeInfoList, "직무별 이력서 정보를 조회했습니다.")
-            );
-
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("이력서 정보 조회 중 오류가 발생했습니다: " + e.getMessage(), 500));
-        }
-    }
-
-    /**
-     * 최근 등록된 이력서 정보 조회
-     * GET /api/v1/career-coach/resume/latest
-     */
-    @GetMapping("/resume/latest")
-    public ResponseEntity<ApiResponse<ResumeInfo>> getLatestResumeInfo() {
-
-        try {
-            Optional<ResumeInfo> resumeInfo = careerCoachService.getLatestResumeInfo();
-
-            if (resumeInfo.isPresent()) {
-                return ResponseEntity.ok(
-                        ApiResponse.success(resumeInfo.get(), "최근 이력서 정보를 조회했습니다.")
-                );
-            } else {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                        .body(ApiResponse.error("등록된 이력서 정보가 없습니다.", 404));
-            }
-
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.error("이력서 정보 조회 중 오류가 발생했습니다: " + e.getMessage(), 500));
         }
     }
 
@@ -163,6 +80,7 @@ public class CareerCoachController {
      */
     @GetMapping("/health")
     public ResponseEntity<ApiResponse<String>> healthCheck() {
+        log.debug("헬스체크 요청");
         return ResponseEntity.ok(
                 ApiResponse.success("OK", "Career Coach API가 정상적으로 작동중입니다.")
         );

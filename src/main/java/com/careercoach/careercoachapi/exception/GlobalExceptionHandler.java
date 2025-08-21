@@ -1,84 +1,78 @@
-// GlobalExceptionHandler.java
 package com.careercoach.careercoachapi.exception;
 
 import com.careercoach.careercoachapi.dto.response.ApiResponse;
-import com.careercoach.careercoachapi.exception.CustomException;
-import com.careercoach.careercoachapi.dto.response.ApiResponse;
-import org.springframework.http.HttpStatus;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.context.request.WebRequest;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
+import java.util.stream.Collectors;
 
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
 
     /**
-     * 커스텀 예외 처리
-     */
-    @ExceptionHandler(CustomException.class)
-    public ResponseEntity<ApiResponse<Object>> handleCustomException(
-            CustomException ex, WebRequest request) {
-
-        ApiResponse<Object> response = ApiResponse.error(ex.getMessage(), ex.getStatusCode());
-        return ResponseEntity.status(ex.getStatusCode()).body(response);
-    }
-
-    /**
-     * 유효성 검증 실패 예외 처리
+     * Validation 예외 처리
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiResponse<Map<String, String>>> handleValidationExceptions(
-            MethodArgumentNotValidException ex) {
+    public ResponseEntity<ApiResponse<String>> handleValidationException(
+            MethodArgumentNotValidException e) {
 
-        Map<String, String> errors = new HashMap<>();
-        ex.getBindingResult().getAllErrors().forEach((error) -> {
-            String fieldName = ((FieldError) error).getField();
-            String errorMessage = error.getDefaultMessage();
-            errors.put(fieldName, errorMessage);
-        });
+        log.warn("입력 검증 실패", e);
 
-        ApiResponse<Map<String, String>> response = ApiResponse.error("입력값 유효성 검증에 실패했습니다.", 400);
-        response.setData(errors);
+        String errorMessage = e.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                .collect(Collectors.joining(", "));
 
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        return ResponseEntity.status(400)
+                .body(ApiResponse.error("입력값이 올바르지 않습니다: " + errorMessage, 400));
     }
 
     /**
-     * 잘못된 요청 파라미터 예외 처리
+     * CompletableFuture 관련 예외 처리
      */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiResponse<Object>> handleIllegalArgumentException(
-            IllegalArgumentException ex, WebRequest request) {
+    @ExceptionHandler({ExecutionException.class, InterruptedException.class, TimeoutException.class})
+    public ResponseEntity<ApiResponse<String>> handleCompletableFutureException(Exception e) {
+        log.error("비동기 작업 처리 중 오류", e);
 
-        ApiResponse<Object> response = ApiResponse.error("잘못된 요청 파라미터입니다: " + ex.getMessage(), 400);
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        if (e instanceof TimeoutException) {
+            return ResponseEntity.status(408)
+                    .body(ApiResponse.error("요청 처리 시간이 초과되었습니다.", 408));
+        }
+
+        if (e instanceof InterruptedException) {
+            Thread.currentThread().interrupt(); // 인터럽트 상태 복원
+            return ResponseEntity.status(500)
+                    .body(ApiResponse.error("요청 처리가 중단되었습니다.", 500));
+        }
+
+        return ResponseEntity.status(500)
+                .body(ApiResponse.error("서비스 처리 중 오류가 발생했습니다.", 500));
     }
 
     /**
      * 일반적인 런타임 예외 처리
      */
     @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<ApiResponse<Object>> handleRuntimeException(
-            RuntimeException ex, WebRequest request) {
-
-        ApiResponse<Object> response = ApiResponse.error("서버 내부 오류가 발생했습니다: " + ex.getMessage(), 500);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+    public ResponseEntity<ApiResponse<String>> handleRuntimeException(RuntimeException e) {
+        log.error("런타임 예외 발생", e);
+        return ResponseEntity.status(500)
+                .body(ApiResponse.error("서비스 처리 중 오류가 발생했습니다.", 500));
     }
 
     /**
-     * 모든 예외에 대한 기본 처리
+     * 모든 예외의 최종 처리
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Object>> handleGlobalException(
-            Exception ex, WebRequest request) {
-
-        ApiResponse<Object> response = ApiResponse.error("예상치 못한 오류가 발생했습니다.", 500);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(response);
+    public ResponseEntity<ApiResponse<String>> handleException(Exception e) {
+        log.error("예상치 못한 예외 발생", e);
+        return ResponseEntity.status(500)
+                .body(ApiResponse.error("시스템 오류가 발생했습니다.", 500));
     }
 }
