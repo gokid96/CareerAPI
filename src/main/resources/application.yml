@@ -1,39 +1,49 @@
+# application.yml - 핵심 설정만 남긴 버전
 server:
   port: 8080
-  tomcat:
-    connection-timeout: 10000  # 20초 (기본값)
+  shutdown: graceful  # SSE 연결을 위한 우아한 종료
+
 spring:
   application:
-    name: career-coach-api  # 애플리케이션 이름 추가
-  datasource:    # HikariCP 커넥션 풀 타임아웃 (가장 중요)
-    hikari:
-      connection-timeout: 30000     # 30초
-      maximum-pool-size: 20         # 최대 커넥션 수
-      minimum-idle: 5               # 최소 유휴 커넥션
-    url: jdbc:h2:mem:testdb  # H2 설정 명시적 추가
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  jpa:
-    hibernate:
-      ddl-auto: create-drop  # 개발용 DDL 설정
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
-  h2:
-    console:
-      enabled: true
+    name: career-coach-api
 
+  # JSON 설정
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false  # ISO 8601 날짜 형식 사용
+    deserialization:
+      fail-on-unknown-properties: false  # 알 수 없는 속성 무시
+
+  # Task 스케줄링 설정 (세션 정리용)
+  task:
+    scheduling:
+      pool:
+        size: 2
+
+# OpenAI 설정
 openai:
   api:
     key: ${OPENAI_API_KEY:your-openai-api-key-here}
-    base-url: https://api.openai.com/v1
-    model: gpt-3.5-turbo
-    max-tokens: 1500
+    model: gpt-4o-mini
     temperature: 0.7
+    max-tokens: 3000
+    timeout: 30s
 
+# 로깅 설정
 logging:
   level:
-    com.careercoach.careercoachapi: DEBUG  # 전체 패키지명
-    org.springframework.web: DEBUG
+    com.careercoach.careercoachapi: INFO
+    org.springframework.web.reactive: WARN
+    org.springframework.scheduling: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# 관리 및 모니터링
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized

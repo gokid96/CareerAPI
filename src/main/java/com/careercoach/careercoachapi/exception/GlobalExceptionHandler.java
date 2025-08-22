@@ -3,12 +3,14 @@ package com.careercoach.careercoachapi.exception;
 import com.careercoach.careercoachapi.dto.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -16,13 +18,31 @@ import java.util.stream.Collectors;
 public class GlobalExceptionHandler {
 
     /**
-     * Validation 예외 처리
+     * 400 - 잘못된 요청 파라미터 타입
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<String>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        log.warn("잘못된 파라미터 타입: {}", e.getName());
+        return ResponseEntity.status(400)
+                .body(ApiResponse.error("잘못된 파라미터 형식입니다.", 400));
+    }
+
+    /**
+     * 400 - 필수 요청 파라미터 누락
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ApiResponse<String>> handleMissingParameter(MissingServletRequestParameterException e) {
+        log.warn("필수 파라미터 누락: {}", e.getParameterName());
+        return ResponseEntity.status(400)
+                .body(ApiResponse.error("필수 파라미터가 누락되었습니다: " + e.getParameterName(), 400));
+    }
+
+    /**
+     * 400 - Validation 예외 처리 (@Valid)
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiResponse<String>> handleValidationException(
-            MethodArgumentNotValidException e) {
-
-        log.warn("입력 검증 실패", e);
+    public ResponseEntity<ApiResponse<String>> handleValidationException(MethodArgumentNotValidException e) {
+        log.warn("입력 검증 실패: {}", e.getBindingResult().getFieldErrors());
 
         String errorMessage = e.getBindingResult()
                 .getFieldErrors()
@@ -35,29 +55,27 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * CompletableFuture 관련 예외 처리
+     * 404 - 존재하지 않는 엔드포인트
      */
-    @ExceptionHandler({ExecutionException.class, InterruptedException.class, TimeoutException.class})
-    public ResponseEntity<ApiResponse<String>> handleCompletableFutureException(Exception e) {
-        log.error("비동기 작업 처리 중 오류", e);
-
-        if (e instanceof TimeoutException) {
-            return ResponseEntity.status(408)
-                    .body(ApiResponse.error("요청 처리 시간이 초과되었습니다.", 408));
-        }
-
-        if (e instanceof InterruptedException) {
-            Thread.currentThread().interrupt(); // 인터럽트 상태 복원
-            return ResponseEntity.status(500)
-                    .body(ApiResponse.error("요청 처리가 중단되었습니다.", 500));
-        }
-
-        return ResponseEntity.status(500)
-                .body(ApiResponse.error("서비스 처리 중 오류가 발생했습니다.", 500));
+    @ExceptionHandler(NoHandlerFoundException.class)
+    public ResponseEntity<ApiResponse<String>> handleNotFoundException(NoHandlerFoundException e) {
+        log.warn("존재하지 않는 엔드포인트 호출: {} {}", e.getHttpMethod(), e.getRequestURL());
+        return ResponseEntity.status(404)
+                .body(ApiResponse.error("요청하신 리소스를 찾을 수 없습니다.", 404));
     }
 
     /**
-     * 일반적인 런타임 예외 처리
+     * 405 - 지원하지 않는 HTTP 메서드
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ApiResponse<String>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
+        log.warn("지원하지 않는 HTTP 메서드: {}", e.getMethod());
+        return ResponseEntity.status(405)
+                .body(ApiResponse.error("지원하지 않는 HTTP 메서드입니다.", 405));
+    }
+
+    /**
+     * 500 - 일반적인 런타임 예외
      */
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<String>> handleRuntimeException(RuntimeException e) {
@@ -67,7 +85,7 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 모든 예외의 최종 처리
+     * 500 - 모든 예외의 최종 처리
      */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<String>> handleException(Exception e) {

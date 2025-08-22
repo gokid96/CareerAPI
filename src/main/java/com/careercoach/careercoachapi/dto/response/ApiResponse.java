@@ -1,13 +1,20 @@
-
-// ApiResponse.java
+// ApiResponse.java - 개선 버전
 package com.careercoach.careercoachapi.dto.response;
 
-public class ApiResponse<T> {
+import lombok.AllArgsConstructor;
 
-    private boolean success;
-    private String message;
-    private T data;
-    private int statusCode;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class ApiResponse<T> {
+    private boolean success;         // 요청 성공 여부 (true/false)
+    private String message;          // 응답 메시지 ("성공", "오류 메시지" 등)
+    private T data;                  // 실제 응답 데이터 (제네릭 타입)
+    private int statusCode;          // HTTP 상태 코드 (200, 400, 500 등)
 
     // 성공 응답 생성 메서드
     public static <T> ApiResponse<T> success(T data) {
@@ -25,48 +32,5 @@ public class ApiResponse<T> {
 
     public static <T> ApiResponse<T> error(String message, int statusCode) {
         return new ApiResponse<>(false, message, null, statusCode);
-    }
-
-    // 생성자
-    public ApiResponse() {}
-
-    public ApiResponse(boolean success, String message, T data, int statusCode) {
-        this.success = success;
-        this.message = message;
-        this.data = data;
-        this.statusCode = statusCode;
-    }
-
-    // Getter/Setter
-    public boolean isSuccess() {
-        return success;
-    }
-
-    public void setSuccess(boolean success) {
-        this.success = success;
-    }
-
-    public String getMessage() {
-        return message;
-    }
-
-    public void setMessage(String message) {
-        this.message = message;
-    }
-
-    public T getData() {
-        return data;
-    }
-
-    public void setData(T data) {
-        this.data = data;
-    }
-
-    public int getStatusCode() {
-        return statusCode;
-    }
-
-    public void setStatusCode(int statusCode) {
-        this.statusCode = statusCode;
     }
 }

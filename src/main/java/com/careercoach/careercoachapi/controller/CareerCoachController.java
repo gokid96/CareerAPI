@@ -1,88 +1,97 @@
-// CareerCoachController.java - 개선된 예외처리
 package com.careercoach.careercoachapi.controller;
 
 import com.careercoach.careercoachapi.dto.request.ResumeInfoRequest;
 import com.careercoach.careercoachapi.dto.response.ApiResponse;
-import com.careercoach.careercoachapi.dto.response.ComprehensiveCareerResponse;
-import com.careercoach.careercoachapi.dto.response.InterviewQuestionsResponse;
-import com.careercoach.careercoachapi.dto.response.LearningPathResponse;
 import com.careercoach.careercoachapi.service.CareerCoachService;
+import com.careercoach.careercoachapi.service.SseEventSender;
+import com.careercoach.careercoachapi.service.SseSessionManager;
+import com.careercoach.careercoachapi.service.StreamingOrchestrator;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.Map;
 
 @Slf4j
 @RestController
 @RequestMapping("/api/v1/career-coach")
-@CrossOrigin(origins = "*") // 개발용 - 운영 시 특정 도메인으로 제한
-@RequiredArgsConstructor  // @Autowired 대신 생성자 주입
+@CrossOrigin(origins = "*")
+@RequiredArgsConstructor
 public class CareerCoachController {
 
-    private final CareerCoachService careerCoachService;
+    // 상수 정의
+    private static final long SSE_TIMEOUT_MS = 120_000L;  // 2분
+    private static final String SESSION_ID_PREFIX = "stream-";
 
-    @PostMapping("/career-coaching")
-    public ResponseEntity<ApiResponse<ComprehensiveCareerResponse>> generateCareerCoaching(
-            @Valid @RequestBody ResumeInfoRequest request) {
+    private final SseSessionManager sessionManager;
+    private final StreamingOrchestrator streamingOrchestrator;
+    private final SseEventSender eventSender;
 
-        log.info("커리어 코칭 생성 요청 - 직무: {}", request.getJobRole());
+    /**
+     * 스트리밍 커리어 코칭 API - 실시간으로 진행상황과 결과 전송
+     */
+    @PostMapping(value = "/career-coaching/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamCareerCoaching(@Valid @RequestBody ResumeInfoRequest request) {
+        log.info("스트리밍 API 요청 - 직무: {}", request.getJobRole());
 
-        CompletableFuture<InterviewQuestionsResponse> interviewQuestionsFuture =
-                CompletableFuture.supplyAsync(() ->
-                        careerCoachService.generateInterviewQuestions(request));
-
-        CompletableFuture<LearningPathResponse> learningPathFuture =
-                CompletableFuture.supplyAsync(() ->
-                        careerCoachService.generateLearningPath(request));
-
-        CompletableFuture<ComprehensiveCareerResponse> combinedFuture =
-                interviewQuestionsFuture.thenCombine(learningPathFuture,
-                        (interviewQuestions, learningPath) ->
-                                ComprehensiveCareerResponse.builder()
-                                        .interviewQuestions(interviewQuestions)
-                                        .learningPath(learningPath)
-                                        .build());
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+        String sessionId = generateSessionId();
 
         try {
-            // checked exception -> try-catch
-            ComprehensiveCareerResponse response = combinedFuture.get(45, TimeUnit.SECONDS);
+            // 세션 생성
+            sessionManager.createSession(sessionId, emitter);
 
-            log.info("커리어 코칭 생성 성공 - 직무: {}", request.getJobRole());
+            // 연결 성공 알림
+            eventSender.sendConnected(emitter, sessionId);
 
-            return ResponseEntity.ok(
-                    ApiResponse.success(response, "커리어 코칭 정보가 성공적으로 생성되었습니다.")
-            );
+            // 병렬 스트리밍 작업 시작
+            streamingOrchestrator.processCareerCoaching(emitter, sessionId, request);
 
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            // checked exception을 RuntimeException으로 변환하여 GlobalExceptionHandler로 전달
-            log.error("비동기 작업 처리 중 오류 - 직무: {}", request.getJobRole(), e);
-
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt(); // 인터럽트 상태 복원
-                throw new RuntimeException("요청 처리가 중단되었습니다.", e);
-            } else if (e instanceof TimeoutException) {
-                throw new RuntimeException("요청 처리 시간이 초과되었습니다.", e);
-            } else {
-                throw new RuntimeException("비동기 작업 처리 중 오류가 발생했습니다.", e);
-            }
+        } catch (Exception e) {
+            log.error("스트리밍 초기화 실패 - sessionId: {}", sessionId, e);
+            handleInitializationError(emitter, sessionId, e);
         }
+
+        return emitter;
     }
 
     /**
-     * API 상태 확인
-     * GET /api/v1/career-coach/health
+     * 헬스체크
      */
     @GetMapping("/health")
-    public ResponseEntity<ApiResponse<String>> healthCheck() {
-        log.debug("헬스체크 요청");
-        return ResponseEntity.ok(
-                ApiResponse.success("OK", "Career Coach API가 정상적으로 작동중입니다.")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> healthCheck() {
+        return ResponseEntity.ok(ApiResponse.success(
+                Map.of(
+                        "status", "OK",
+                        "timestamp", System.currentTimeMillis(),
+                        "activeStreams", sessionManager.getActiveSessionCount(),
+                        "memory", getMemoryInfo()
+                ),
+                "Career Coach API가 정상적으로 작동중입니다."
+        ));
+    }
+
+    // === Private Helper Methods ===
+
+    private String generateSessionId() {
+        return SESSION_ID_PREFIX + System.currentTimeMillis();
+    }
+
+    private void handleInitializationError(SseEmitter emitter, String sessionId, Exception e) {
+        sessionManager.removeSession(sessionId);
+        emitter.completeWithError(e);
+    }
+
+    private Map<String, Object> getMemoryInfo() {
+        Runtime runtime = Runtime.getRuntime();
+        return Map.of(
+                "totalMemory", runtime.totalMemory(),
+                "freeMemory", runtime.freeMemory(),
+                "usedMemory", runtime.totalMemory() - runtime.freeMemory()
         );
     }
 }

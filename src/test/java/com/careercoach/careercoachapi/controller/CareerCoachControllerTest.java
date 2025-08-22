@@ -1,108 +1,161 @@
+// CareerCoachControllerTest.java - 최신 방식
 package com.careercoach.careercoachapi.controller;
 
-import com.careercoach.careercoachapi.controller.CareerCoachController;
 import com.careercoach.careercoachapi.dto.request.ResumeInfoRequest;
-import com.careercoach.careercoachapi.dto.response.InterviewQuestionsResponse;
-import com.careercoach.careercoachapi.service.CareerCoachService;
+import com.careercoach.careercoachapi.service.SseEventSender;
+import com.careercoach.careercoachapi.service.SseSessionManager;
+import com.careercoach.careercoachapi.service.StreamingOrchestrator;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.http.MediaType;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
+import org.springframework.http.*;
+import org.springframework.test.context.ActiveProfiles;
 
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
-@WebMvcTest(CareerCoachController.class)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
+@DisplayName("CareerCoachController 통합 테스트")
 class CareerCoachControllerTest {
 
     @Autowired
-    private MockMvc mockMvc;
-
-    @MockitoBean
-    private CareerCoachService careerCoachService;
+    private TestRestTemplate restTemplate;
 
     @Autowired
     private ObjectMapper objectMapper;
 
-    private ResumeInfoRequest sampleRequest;
-    private InterviewQuestionsResponse sampleResponse;
+    @LocalServerPort
+    private int port;
 
-    @BeforeEach
-    void setUp() {
-        // 테스트용 샘플 데이터 준비
-        List<String> techSkills = Arrays.asList("Spring Boot", "Java", "MySQL", "AWS");
-        sampleRequest = new ResumeInfoRequest(
-                "3년차 백엔드 개발자, Spring Boot 기반 웹 서비스 개발 경험",
-                "백엔드 개발자",
-                techSkills
-        );
+    // Mock 객체들은 TestConfiguration에서 Bean으로 등록
+    @Autowired
+    private StreamingOrchestrator streamingOrchestrator;
 
-        List<String> questions = Arrays.asList(
-                "Spring Boot를 사용한 프로젝트에서 가장 어려웠던 기술적 문제와 해결 방법을 설명해주세요.",
-                "3년간의 백엔드 개발 경험 중 가장 성과가 있었던 프로젝트는 무엇인가요?",
-                "AWS 환경에서 서비스 운영 시 고려해야 할 사항들을 설명해주세요.",
-                "팀 프로젝트에서 다른 개발자와의 협업 경험을 구체적으로 말씀해주세요.",
-                "현재 보유한 기술 스택 외에 추가로 학습하고 싶은 기술이 있다면 무엇인가요?"
-        );
+    @Autowired
+    private SseEventSender eventSender;
 
-        sampleResponse = new InterviewQuestionsResponse(questions, "백엔드 개발자", techSkills);
+    @Autowired
+    private SseSessionManager sessionManager;
+
+    @TestConfiguration
+    static class TestConfig {
+        @Bean
+        @Primary
+        public StreamingOrchestrator mockStreamingOrchestrator() {
+            return Mockito.mock(StreamingOrchestrator.class);
+        }
+
+        @Bean
+        @Primary
+        public SseEventSender mockSseEventSender() {
+            return Mockito.mock(SseEventSender.class);
+        }
+
+        @Bean
+        @Primary
+        public SseSessionManager mockSseSessionManager() {
+            SseSessionManager mock = Mockito.mock(SseSessionManager.class);
+            when(mock.getActiveSessionCount()).thenReturn(3L);
+            return mock;
+        }
     }
 
     @Test
-    void testGenerateInterviewQuestions_Success() throws Exception {
-        // Given
-        when(careerCoachService.generateInterviewQuestions(any(ResumeInfoRequest.class)))
-                .thenReturn(sampleResponse);
+    @DisplayName("헬스 체크 API 테스트")
+    void healthCheck_ReturnsOk() {
+        // When
+        ResponseEntity<Map> response = restTemplate.getForEntity(
+                "http://localhost:" + port + "/api/v1/career-coach/health",
+                Map.class
+        );
 
-        // When & Then
-        mockMvc.perform(post("/api/v1/career-coach/interview-questions")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(sampleRequest)))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("면접 질문이 성공적으로 생성되었습니다."))
-                .andExpect(jsonPath("$.data.questions").isArray())
-                .andExpect(jsonPath("$.data.questions").isNotEmpty())
-                .andExpect(jsonPath("$.data.targetJobRole").value("백엔드 개발자"));
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).isNotNull();
+
+        Map<String, Object> body = response.getBody();
+        assertThat(body.get("success")).isEqualTo(true);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) body.get("data");
+        assertThat(data.get("status")).isEqualTo("OK");
+        assertThat(data.get("activeStreams")).isEqualTo(3);
+        assertThat(data.get("timestamp")).isNotNull();
+        assertThat(data.get("memory")).isNotNull();
+
+        verify(sessionManager).getActiveSessionCount();
     }
 
     @Test
-    void testGenerateInterviewQuestions_ValidationError() throws Exception {
-        // Given - 잘못된 요청 데이터 (필수 필드 누락)
+    @DisplayName("스트리밍 API - 잘못된 요청 데이터 검증")
+    void streamCareerCoaching_InvalidRequest_ReturnsBadRequest() {
+        // Given - 필수 필드 누락
         ResumeInfoRequest invalidRequest = new ResumeInfoRequest();
-        invalidRequest.setCareerSummary(""); // 빈 값
-        invalidRequest.setJobRole(""); // 빈 값
-        invalidRequest.setTechSkills(Arrays.asList()); // 빈 리스트
+        invalidRequest.setJobRole(""); // 빈 문자열
+        invalidRequest.setCareerSummary(null); // null
+        invalidRequest.setTechSkills(List.of()); // 빈 리스트
 
-        // When & Then
-        mockMvc.perform(post("/api/v1/career-coach/interview-questions")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(invalidRequest)))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.statusCode").value(400));
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<ResumeInfoRequest> requestEntity = new HttpEntity<>(invalidRequest, headers);
+
+        // When
+        ResponseEntity<Map> response = restTemplate.postForEntity(
+                "http://localhost:" + port + "/api/v1/career-coach/career-coaching/stream",
+                requestEntity,
+                Map.class
+        );
+
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+
+        Map<String, Object> body = response.getBody();
+        assertThat(body.get("success")).isEqualTo(false);
+        assertThat(body.get("errorCode")).isEqualTo(400);
+
+        // 비즈니스 로직이 호출되지 않았는지 확인
+        verify(streamingOrchestrator, never()).processCareerCoaching(any(), any(), any());
     }
 
     @Test
-    void testHealthCheck() throws Exception {
-        // When & Then
-        mockMvc.perform(get("/api/v1/career-coach/health"))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data").value("OK"))
-                .andExpect(jsonPath("$.message").value("Career Coach API가 정상적으로 작동중입니다."));
+    @DisplayName("존재하지 않는 엔드포인트 호출")
+    void nonExistentEndpoint_ReturnsNotFound() {
+        // When
+        ResponseEntity<String> response = restTemplate.getForEntity(
+                "http://localhost:" + port + "/api/v1/career-coach/non-existent",
+                String.class
+        );
+
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("지원하지 않는 HTTP 메서드")
+    void unsupportedHttpMethod_ReturnsMethodNotAllowed() {
+        // When
+        ResponseEntity<String> response = restTemplate.exchange(
+                "http://localhost:" + port + "/api/v1/career-coach/health",
+                HttpMethod.DELETE,
+                null,
+                String.class
+        );
+
+        // Then
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED);
     }
 }
